@@ -9,9 +9,9 @@ A codebase for IEL bots and simulation analysis software.
 
 Purpose: This is a step-by-step guide on how to run simulations on Flexemarkets (https://flexemarkets.com/site), using the bot_launcher.py script (referred to as bot launcher or launcher from here on) as well as an IEL manager and IEL trader bots. The tutorial is split into two parts: the first is an overview of the Flexemarkets platform, and the second covers the necessary modifications to the bot Python scripts and an explanation of the bot launcher.
 
-Part 1: Consult the FM documentation here: https://docs.google.com/document/d/1P8NnPDw7ScGzjhe_OIakpVP83FhhwZRKpkkYZnUCsas/edit and go through all the steps listed before proceeding to Part 2. If one needs help getting an account more quickly, email peter.bossaerts@unimelb.edu.au or jan.nielsen@adhocmarkets.com. They will provide the username for logging in, though the password is set by the user and not stored by FM.
+### Part 1: Setup FM account
 
-Additional Notes:
+Consult the FM documentation here: https://docs.google.com/document/d/1P8NnPDw7ScGzjhe_OIakpVP83FhhwZRKpkkYZnUCsas/edit and go through all the steps listed before proceeding to Part 2. If one needs help getting an account more quickly, email peter.bossaerts@unimelb.edu.au or jan.nielsen@adhocmarkets.com. They will provide the username for logging in, though the password is set by the user and not stored by FM.
 
 The difference between Adhocmarkets and Flexemarkets is that as of the time this guide is written, only Flexemarkets has the capability for simulations to be run using manager bots, so Flexemarkets is preferred.  
 
@@ -20,7 +20,7 @@ When creating a market, be sure to remember the item name (this is also listed w
 When running simulations with a manager, the initial allocation template will not matter, since the manager determines initial holdings before every period. The traders that are added to the market will correspond with either human users or trader bots (each bot has its own email and password, which is used in Part 2).     
 
 
-Part 2: Running simulations from the command line (9/20/20 version)
+### Part 2: Running simulations from the command line (9/20/20 version)
 
 IMPORTANT: Make sure the market is closed before running a simulation.
 
@@ -45,16 +45,21 @@ All overall parameters are required, while only "val_set" for bots is required. 
 
 Other optional parameters are:
 
-J	      The number of items in "considered set" S
-muv       The rate of mutation of value
-sigmav    The variance on the mutation of value. float((su-sl))/10
-mul       The rate of mutation of length
-K         The max length of a "considered strategy"
-T         A measure of how far back to start keeping track of past prices
+J	- The number of items in "considered set" S
+
+muv - The rate of mutation of value
+
+sigmav - The variance on the mutation of value. 
+
+mul - The rate of mutation of length
+
+K - The max length of a "considered strategy"
+
+T - A measure of how far back to start keeping track of past prices
 
 
 
-Part 2: Running simulations from the command line (8/8/20 version)
+### Part 2: Running simulations from the command line (8/8/20 version)
 
 IMPORTANT: Make sure the market is closed before running a simulation. 
 
@@ -68,9 +73,9 @@ Note: On other operating systems, the format of the file path may be different. 
 
 The forward slash (or backslash) at the end of the file path is required. When run, the IEL manager will create a new folder, i.e. "/Users/MeganT/Documents/IEL/sim1/", in which to save csv files. Separate folders (named sim1, sim2, etc.) are created for each simulation, in case one is running the same simulation multiple times with the bot launcher.
 
-1.1) Before moving on to running the bot launcher, make sure that each individual trader has its corresponding Python script. One can simply make copies of a template file, and for each trader, modify the code within the "if __name__ == '__main__'" block as follows. The email and password in the IELAgent constructor should correspond to a unique Flexemarket user that is imported through the Flexemarkets website (done in Part 1). The constructor of the trader takes in a valuation array, consisting of how much a trader values items 0 to n (where the valuation of item 0 is always 0 -- this is only needed since arrays are 0-indexed). The market id should remain the same across all agents so that all bots trade on the same market. 
+2) Before moving on to running the bot launcher, make sure that each individual trader has its corresponding Python script. One can simply make copies of a template file, and for each trader, modify the code within the "if __name__ == '__main__'" block as follows. The email and password in the IELAgent constructor should correspond to a unique Flexemarket user that is imported through the Flexemarkets website (done in Part 1). The constructor of the trader takes in a valuation array, consisting of how much a trader values items 0 to n (where the valuation of item 0 is always 0 -- this is only needed since arrays are 0-indexed). The market id should remain the same across all agents so that all bots trade on the same market. 
 
-2) It is assumed that one is running the bot launcher on the command line, in the same directory as all the bot scripts (of both the manager and traders), since the launcher takes in directives for running simulations through command line arguments. Also, it is assumed that the trader bot scripts follow this naming convention: prefix + number, where the prefix is the same for all traders and the number varies from 1 to n, where n is the total number of traders to run. For example, if the prefix is "IELv3_b" and n = 3, running the following command:
+3) It is assumed that one is running the bot launcher on the command line, in the same directory as all the bot scripts (of both the manager and traders), since the launcher takes in directives for running simulations through command line arguments. Also, it is assumed that the trader bot scripts follow this naming convention: prefix + number, where the prefix is the same for all traders and the number varies from 1 to n, where n is the total number of traders to run. For example, if the prefix is "IELv3_b" and n = 3, running the following command:
 
 python bot_launcher.py IELv3_b 3
 
@@ -78,18 +83,18 @@ will run IELv3_b1.py, IELv3_b2.py, and IELv3_b3.py simultaneously.
 
 Note: Without an IEL manager, one needs to manually download the simulation data from the user interface, and this data will contain the orders and holdings from all past periods run on a given market.
 
-3) Running an IEL manager along with a manager simply involves including the "-m" optional argument, followed by the full name of the IELmanager file without the ".py" extension. Running the following command:
+4) Running an IEL manager along with a manager simply involves including the "-m" optional argument, followed by the full name of the IELmanager file without the ".py" extension. Running the following command:
 
 python bot_launcher.py IELv3_b 2 -m IELmanager1
 
 makes sure to run IELmanager1.py before IELv3_b1.py, IELv3_b2.py, and IELv3_b3.py. The results of the simulation are stored in the "sim1" folder within the SAVE_TO directory.
 
-4) Assuming that simulations are run with an IEL manager, one can repeat the same simulation x times by including the "-r" optional argument, followed by x, which must be an integer. A new simulation starts and ends when the IEL manager opens the market for the first period and then closes the market after the final period. Running the following command:
+5) Assuming that simulations are run with an IEL manager, one can repeat the same simulation x times by including the "-r" optional argument, followed by x, which must be an integer. A new simulation starts and ends when the IEL manager opens the market for the first period and then closes the market after the final period. Running the following command:
 
 python bot_launcher.py IELv3_b 2 -m IELmanager1 -r 2
 
 repeats the process in 3) twice. The results of the first and second runs are stored in "sim1" and "sim2" respectively within the SAVE_TO directory.
 
-5) To stop a simulation before it ends, CTRL+Z OR CTRL+C on a Unix command line will terminate all bots cleanly. 
+6) To stop a simulation before it ends, CTRL+Z OR CTRL+C on a Unix command line will terminate all bots cleanly. 
 
 
