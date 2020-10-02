@@ -136,7 +136,7 @@ class IELAgent(Agent):
         # Set to a float when we don't want buy/sell orders to update on a timer.
         self._rank_frequency = 20
 
-    def init_from_config(self, fname, bot_num):
+        def init_from_config(self, fname, bot_num):
         '''
         Read in general info shared across all bots. Then read in
         bot-specific information
@@ -156,6 +156,8 @@ class IELAgent(Agent):
         # config file, just use the default class values
         self.min_holdings = 0
         self.max_holdings = len(self.valuations) - 1
+        # additional 0 is added to the valuation array fix the index error
+        self.valuations.append(0)
         if MIN_HOLDINGS_COL in bot_info.columns:
             val = bot_info[MIN_HOLDINGS_COL].iloc[row_index]
             if not np.isnan(val):
@@ -276,10 +278,8 @@ class IELAgent(Agent):
         :param action: 0 corresponds to buying, 1 corresponds to selling
         """
         for j in range(self.J):
-            sigmav = 1
             if action == self.BUY:
-                if self.get_units() < self.max_holdings:
-                    sigmav = max(1, 0.1 * (self.valuations[self.get_units() + 1] - self.sl))
+                sigmav = max(1, 0.1 * (self.valuations[self.get_units() + 1] - self.sl))
                 if random.uniform(0, 1) < self.muv:
                     centers = self.strategies[action][j]
                     r = (truncnorm.rvs((self.sl - centers) / float(sigmav),
@@ -287,8 +287,7 @@ class IELAgent(Agent):
                                        loc=centers, scale=sigmav, size=1))
                     self.strategies[action][j] = int(np.array(r).tolist()[0])
             else:
-                if self.get_units() <= self.max_holdings:
-                    sigmav = max(1, 0.1 * (self.su - self.valuations[self.get_units()]))
+                sigmav = max(1, 0.1 * (self.su - self.valuations[self.get_units()]))
                 if random.uniform(0, 1) < self.muv:
                     centers = self.strategies[action][j]
                     r = (truncnorm.rvs((self.sl - centers) / float(sigmav),
@@ -325,25 +324,23 @@ class IELAgent(Agent):
 
         :param action: 0 corresponds to buying, 1 corresponds to selling
         """
-        try:
-            if action == 0:
-                bid = self.strategies[action][j]
-                # Return 0 for case where bid exceeds the valuation of item to be bought
-                if bid <= self.curr_best_offer or self.get_units() >= self.max_holdings or \
-                        bid > self.valuations[self.get_units() + 1]:
-                    return 0
-                else:
-                    return self.valuations[self.get_units() + 1] - self.curr_best_offer
+
+        if action == 0:
+            bid = self.strategies[action][j]
+            # Return 0 for case where bid exceeds the valuation of item to be bought
+            if bid <= self.curr_best_offer or self.get_units() >= self.max_holdings or \
+                    bid > self.valuations[self.get_units() + 1]:
+                return 0
             else:
-                offer = self.strategies[action][j]
-                # Return 0 for case where the offer is lower than the valuation of item to be sold
-                if offer >= self.curr_best_bid or self.get_units() > self.max_holdings or \
-                        offer < self.valuations[self.get_units()]:
-                    return 0
-                else:
-                    return self.curr_best_bid - self.valuations[self.get_units()]
-        except Exception as e:
-            tb.print_exc()
+                return self.valuations[self.get_units() + 1] - self.curr_best_offer
+        else:
+            offer = self.strategies[action][j]
+            # Return 0 for case where the offer is lower than the valuation of item to be sold
+            if offer >= self.curr_best_bid or self.get_units() >= self.max_holdings or \
+                    offer < self.valuations[self.get_units()]:
+                return 0
+            else:
+                return self.curr_best_bid - self.valuations[self.get_units()]
 
     def foregone_utility_past(self, j, action):
         """
@@ -437,11 +434,7 @@ class IELAgent(Agent):
             if not is_mine:
                 order_book = self._categorize_orders()
                 self._react_to_book(order_book)
-            # Logs the number of orders currently in the order-book.
-            ##self.inform("Number of orders in order-book for market[{}] is {}".format(self._market_id, len(Order.all())))
         except Exception as e:
-            #print(self.get_units())
-            #print(self.strategies)
             tb.print_exc()
             self.error("An error occurred while reasoning on order-book in market[{}]: {}: {}".format(self._market_id,
                                                                                                       e.__class__.__name__,
@@ -469,18 +462,20 @@ class IELAgent(Agent):
         Only initializes the strategy set if they are currently uninitialized
         """
         if len(self.strategies) == 0:
-            #print("I have {} units".format(self.get_units()))
-            #print()
             self.strategies = [[], []]
             for j in range(self.J):
-                if self.get_units() >= self.max_holdings:
-                    self.strategies[self.BUY].append(self.sl)
+                if self.sl > self.valuations[self.get_units() + 1] or self.su < self.valuations[self.get_units()]:
+                    break
                 else:
-                    self.strategies[self.BUY].append(random.randint(self.sl, int(self.valuations[self.get_units() + 1])))
-                if self.get_units() > self.max_holdings:
-                    self.strategies[self.SELL].append(self.su)
-                else:
-                    self.strategies[self.SELL].append(random.randint(int(self.valuations[self.get_units()]), self.su))
+                    if self.get_units() >= self.max_holdings:
+                        self.strategies[self.BUY].append(self.sl)
+                    else:
+                        self.strategies[self.BUY].append(
+                            random.randint(self.sl, int(self.valuations[self.get_units() + 1])))
+                    if self.get_units() > self.max_holdings:
+                        self.strategies[self.SELL].append(self.su)
+                    else:
+                        self.strategies[self.SELL].append(random.randint(int(self.valuations[self.get_units()]), self.su))
         self.updateW(self.BUY)
         self.updateW(self.SELL)
 
@@ -500,7 +495,6 @@ class IELAgent(Agent):
         except Exception as e:
             self.error(e)
 
-
     def pre_start_tasks(self):
         """
         The sub-classed trading agent should override this method to perform any task or schedule tasks
@@ -508,12 +502,10 @@ class IELAgent(Agent):
         :return:
         """
         super().execute_periodically(self.check_book, 2)
-        ##self.inform('Initialized bot.')
 
     def check_book(self):
         try:
             if len(self.strategies) != 0 and self.is_session_active():
-                ##self.inform('Checking book.')
                 order_book = self._categorize_orders()
                 if len(order_book["mine"]["buy"]) > 0:
                     self.cancel_ord(self.BUY, order_book)
@@ -523,7 +515,6 @@ class IELAgent(Agent):
                 self.send_ord(self.SELL, order_book)
         except Exception as e:
             tb.print_exc(e)
-            # self.error(e)
 
     def received_trades(self, orders: List[Order], market: Market = None):
         """
@@ -532,7 +523,7 @@ class IELAgent(Agent):
         :param market: Market for which trades were received
         :return:
         """
-        #self.error("Method `received_trades` not implemented.")
+        # self.error("Method `received_trades` not implemented.")
         pass
 
     def respond_to_user(self, message: str):
@@ -541,7 +532,6 @@ class IELAgent(Agent):
         :param message: Incoming message from user
         :return:
         """
-        #self.error("User communication is enabled but method `respond_to_user` not implemented.")
         pass
 
     def _get_order(self, order_side):
@@ -553,14 +543,7 @@ class IELAgent(Agent):
         """
         action = self.BUY
         if order_side == OrderSide.SELL:
-            ##self.inform("Getting a sell order")
             action = self.SELL
-        #else:
-            ##self.inform("Getting a buy order")
-        # if self.onstrat[action] == 0:
-        #     self.onstrat[action] = 1
-        # else:
-        self.onstrat[action] = 0
         self.Vexperimentation(action)
         self.updateW(action)
         self.replicate(action)
@@ -568,10 +551,12 @@ class IELAgent(Agent):
         # Throws an exception if the agent is selling and the computed
         # price is 0 or less. Throws an exception if the agent is buying and
         # the computed price is less than 0.
-        if order_side == OrderSide.SELL and self.curr_strat[self.SELL] < 0:
-            raise Exception('Price should not be 0 or less when selling.')
-        if order_side == OrderSide.BUY and self.curr_strat[self.BUY] < 0:
-            raise Exception('Price should not be less than 0 when buying.')
+        if order_side == OrderSide.SELL and (
+                self.curr_strat[self.SELL] < self.sl or self.curr_strat[self.SELL] > self.su):
+            raise Exception('Price should not be less than the minimum or greater than the maximum when selling.')
+        if order_side == OrderSide.BUY and (
+                self.curr_strat[self.BUY] < self.sl or self.curr_strat[self.BUY] > self.su):
+            raise Exception('Price should not be less than the minimum or greater than the maximum when selling.')
         price = max(self.sl, self.curr_strat[action])
         order = Order.create_new(self.markets[self._market_id])
         order.price = price
@@ -610,8 +595,6 @@ class IELAgent(Agent):
         orders_dict = {"mine": {"buy": [], "sell": []}, "others": {"buy": [], "sell": []}}
         for order in Order.all().values():
             # Make sure to exclude cancel orders
-            # if order.order_type == OrderType.LIMIT and not order.is_consumed \
-            #         and not order.is_split:
             if order.order_type == OrderType.LIMIT and order.is_pending:
                 if order.mine and order.order_side == OrderSide.BUY:
                     orders_dict["mine"]["buy"].append(order)
@@ -647,28 +630,26 @@ class IELAgent(Agent):
     def send_ord(self, action, order_book):
         my_orders = order_book["mine"]
         if action == self.BUY:
-            waiting = self._waiting_for(self._mm_buy_prefix)
-            if not waiting and len(my_orders["buy"]) == 0 and \
-                self.get_units() < self.max_holdings:
-                order = self._get_order(OrderSide.BUY)
-                ##self.inform('Received returned.order.')
-                cash_i_have = self.holdings.cash_available
-                ##self.inform("I have {} cash left.".format(cash_i_have))
-                if len(my_orders["buy"]) < self._max_market_making_orders \
-                        and cash_i_have >= order.price:
-                    order.ref = self._increment_counter(self._mm_buy_prefix)
-                    self.send_order(order)
+            if self.sl <= self.valuations[self.get_units() + 1]:
+                waiting = self._waiting_for(self._mm_buy_prefix)
+                if not waiting and len(my_orders["buy"]) == 0 and self.get_units() < self.max_holdings:
+                    order = self._get_order(OrderSide.BUY)
+                    cash_i_have = self.holdings.cash_available
+                    if len(my_orders["buy"]) < self._max_market_making_orders \
+                            and cash_i_have >= order.price:
+                        order.ref = self._increment_counter(self._mm_buy_prefix)
+                        self.send_order(order)
         else:
-            waiting = self._waiting_for(self._mm_sell_prefix)
-            if not waiting and len(my_orders["sell"]) == 0:
-                order = self._get_order(OrderSide.SELL)
-                market = self.markets[self._market_id]
-                units_i_have = self.holdings.assets[market].units_available
-                ##self.inform("I have {} units left.".format(units_i_have))
-                if len(my_orders["sell"]) < self._max_market_making_orders \
-                        and units_i_have >= order.units and self.get_units() > self.min_holdings:
-                    order.ref = self._increment_counter(self._mm_sell_prefix)
-                    self.send_order(order)
+            if self.su >= self.valuations[self.get_units()]:
+                waiting = self._waiting_for(self._mm_sell_prefix)
+                if not waiting and len(my_orders["sell"]) == 0:
+                    order = self._get_order(OrderSide.SELL)
+                    market = self.markets[self._market_id]
+                    units_i_have = self.holdings.assets[market].units_available
+                    if len(my_orders["sell"]) < self._max_market_making_orders \
+                            and units_i_have >= order.units and self.get_units() > self.min_holdings:
+                        order.ref = self._increment_counter(self._mm_sell_prefix)
+                        self.send_order(order)
 
     def _react_to_book(self, order_book):
 
@@ -689,13 +670,10 @@ class IELAgent(Agent):
         curr_offers = others_orders["sell"]
         submit_bid = False
         submit_offer = False
-        ##self.inform("Reacting to current orders.")
-        ##self.inform("Other bids: {}".format(curr_bids))
 
         if len(curr_bids) != 0:
             h_bid = curr_bids[0].price
             if h_bid != self.curr_best_bid:
-                ##self.inform("Updating utilities for selling.")
                 submit_offer = True
                 # Updates the current best bid
                 self.curr_best_bid = h_bid
@@ -704,7 +682,6 @@ class IELAgent(Agent):
         if len(curr_offers) != 0:
             l_offer = curr_offers[0].price
             if l_offer != self.curr_best_offer:
-                ##self.inform("Updating utilities for buying.")
                 submit_bid = True
                 # Updates the current best offer
                 self.curr_best_offer = l_offer
@@ -760,7 +737,6 @@ class IELAgent(Agent):
         # Takes the additional action of adding an order that is about to be sent
         # to a dictionary that keeps track of objects using their reference.
 
-        ##self.inform("Sending Order: " + str(order))
         if order.ref is None:
             order.ref = self._increment_counter("n")
         self._orders_waiting_ackn[order.ref] = order
@@ -769,19 +745,15 @@ class IELAgent(Agent):
     def received_marketplace_info(self, marketplace_info):
 
         _extra_info = "Waiting for marketplace to open." if not marketplace_info["status"] else ""
-        ##self.inform("Marketplace is now {}. {}".format(self.current_session.state.name, _extra_info))
-
 
     def order_accepted(self, order):
         ''' Now takes in the order book as a parameter. '''
         if order.mine:
-            ##self.inform("An order was accepted: " + order.ref)
             if order.ref in self._orders_waiting_ackn:
                 del self._orders_waiting_ackn[order.ref]
 
     def order_rejected(self, info, order):
         if order.mine:
-            ##self.inform("An order was rejected: " + order.ref)
             if order.ref in self._orders_waiting_ackn:
                 del self._orders_waiting_ackn[order.ref]
 
