@@ -3,8 +3,6 @@ from subprocess import Popen
 import signal
 import sys
 
-CONFIG_FILE = "/Users/MeganT/Documents/mytest/IEL_config.xlsx"
-
 def signal_handler(sig, frame):
     terminate_processes()
     sys.exit()
@@ -36,9 +34,9 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT, signal_handler)
     for i in range(args.r[0]):
         if args.m is not None:
-            processes.append(Popen(['python', str(args.m[0]) + '.py', CONFIG_FILE]))
+            processes.append(Popen(['python', str(args.m[0]) + '.py', str(i+1)]))
         for i in range(1, args.num_bots + 1):
-            processes.append(Popen(['python', args.fname + str(i) + '.py', CONFIG_FILE, str(i)]))
+            processes.append(Popen(['python', args.fname + str(i) + '.py']))
         if len(processes) > 0:
             processes[0].wait()
         terminate_processes()
