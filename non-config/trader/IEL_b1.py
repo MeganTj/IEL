@@ -1,15 +1,11 @@
 import copy
-import pdb
 from typing import List
 from fmclient import Agent
 from fmclient import Order, OrderSide, OrderType, Holding
 from fmclient import Market, Asset
 from fmclient import Session, SessionState
-import logging
 import random
 import numpy as np
-import scipy
-import scipy.stats
 from scipy.stats import truncnorm
 import traceback as tb
 
@@ -139,13 +135,6 @@ class IELAgent(Agent):
         self.sl = self.markets[self._market_id].min_price
         self.curr_best_bid = self.sl
         self.curr_best_offer = self.su
-
-        # Extend valuations array such that the maximum index
-        # is the maximum number of units an agent can hold in the market
-        val_copy = self.valuations
-        self.valuations = np.zeros(self.max_holdings + 2)
-        for ind in range(len(val_copy)):
-            self.valuations[ind] = val_copy[ind]
 
     def get_units(self):
         """ Returns the number of units that the agent holds """
@@ -283,7 +272,7 @@ class IELAgent(Agent):
         else:
             offer = self.strategies[action][j]
             # Return 0 for case where the offer is lower than the valuation of item to be sold
-            if offer >= self.curr_best_bid or self.get_units() >= self.max_holdings or \
+            if offer >= self.curr_best_bid or self.get_units() > self.max_holdings or \
                     offer < self.valuations[self.get_units()]:
                 return 0
             else:
@@ -320,7 +309,7 @@ class IELAgent(Agent):
             # get minimum of past prices
             p_max = max(self.past_trades)
             z = min(p_max, self.curr_best_bid)
-            if offer >= z or self.get_units() >= self.max_holdings or \
+            if offer >= z or self.get_units() > self.max_holdings or \
                     offer < self.valuations[self.get_units()]:
                 return 0
             elif offer < self.curr_best_bid:
@@ -383,9 +372,6 @@ class IELAgent(Agent):
                 self._react_to_book(order_book)
         except Exception as e:
             tb.print_exc()
-            self.error("An error occurred while reasoning on order-book in market[{}]: {}: {}".format(self._market_id,
-                                                                                                      e.__class__.__name__,
-                                                                                                      e))
 
     def received_holdings(self, holdings: Holding):
         """
@@ -402,7 +388,7 @@ class IELAgent(Agent):
                 self.updateW(self.BUY)
                 self.updateW(self.SELL)
         except Exception as e:
-            self.error(e)
+            tb.print_exc()
 
     def initialize_strat_set(self):
         """
@@ -440,7 +426,7 @@ class IELAgent(Agent):
                 self.strategies = []
                 self._orders_waiting_ackn = {}
         except Exception as e:
-            self.error(e)
+            tb.print_exc()
 
     def pre_start_tasks(self):
         """
@@ -461,7 +447,7 @@ class IELAgent(Agent):
                 self.send_ord(self.BUY, order_book)
                 self.send_ord(self.SELL, order_book)
         except Exception as e:
-            self.error(e)
+            tb.print_exc()
 
     def received_trades(self, orders: List[Order], market: Market = None):
         """
@@ -470,7 +456,6 @@ class IELAgent(Agent):
         :param market: Market for which trades were received
         :return:
         """
-        # self.error("Method `received_trades` not implemented.")
         pass
 
     def respond_to_user(self, message: str):
@@ -495,9 +480,6 @@ class IELAgent(Agent):
         self.updateW(action)
         self.replicate(action)
         self.strat_selection(action)
-        # Throws an exception if the agent is selling and the computed
-        # price is 0 or less. Throws an exception if the agent is buying and
-        # the computed price is less than 0.
         if order_side == OrderSide.SELL and (
                 self.curr_strat[self.SELL] < self.sl or self.curr_strat[self.SELL] > self.su):
             raise Exception('Price should not be less than the minimum or greater than the maximum when selling.')
