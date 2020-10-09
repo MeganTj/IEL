@@ -231,32 +231,31 @@ class IELAgent(Agent):
         :param action: 0 corresponds to buying, 1 corresponds to selling
         """
 
-        strat = self.strategies[action]
         if action == self.BUY:
-            strat = list(filter(lambda x: x < self.valuations[self.get_units() + 1], strat))
+            self.strategies[action] = list(filter(lambda x: x < self.valuations[self.get_units() + 1], self.strategies[action]))
         else:
-            strat = list(filter(lambda x: x > self.valuations[self.get_units()], strat))
-        if len(strat) < self.J:
-            if action == self.BUY:
-                if len(strat) == 0:
+            self.strategies[action] = list(filter(lambda x: x > self.valuations[self.get_units()], self.strategies[action]))
+        if action == self.BUY:
+            if len(self.strategies[action]) < self.J:
+                if len(self.strategies[action]) == 0:
                     self.curr_strat[action] = self.sl
-                x = self.J - len(strat)
+                x = self.J - len(self.strategies[action])
                 for i in range(x):
-                    strat.append(int(random.uniform(self.sl, self.valuations[self.get_units() + 1])))
-
-            else:
-                if len(strat) == 0:
+                    self.strategies[action].append(int(random.uniform(self.sl, self.valuations[self.get_units() + 1])))
+        else:
+            if len(self.strategies[action]) < self.J:
+                if len(self.strategies[action]) == 0:
                     self.curr_strat[action] = self.su
-                x = self.J - len(strat)
+                x = self.J - len(self.strategies[action])
                 for i in range(x):
-                    strat.append(int(random.uniform(self.valuations[self.get_units()], self.su)))
+                    self.strategies[action].append(int(random.uniform(self.valuations[self.get_units()], self.su)))
 
             self.updateW(action)
         choicep = self.choiceprobabilities(action)
 
         if sum(choicep) == 0:
-            choicep = [1 / len(strat) for x in strat]
-        self.curr_strat[action] = int(self.rand_choice(strat, choicep))
+            choicep = [1 / len(self.strategies[action]) for x in self.strategies[action]]
+        self.curr_strat[action] = int(self.rand_choice(self.strategies[action], choicep))
 
     def rand_choice(self, items, distr):
         x = random.uniform(0, 1)
@@ -336,7 +335,7 @@ class IELAgent(Agent):
         else:
             offer = self.strategies[action][j]
             # Return 0 for case where the offer is lower than the valuation of item to be sold
-            if offer >= self.curr_best_bid or self.get_units() > self.max_holdings or \
+            if offer >= self.curr_best_bid or self.get_units() <= self.min_holdings or \
                     offer < self.valuations[self.get_units()]:
                 return 0
             else:
@@ -373,7 +372,7 @@ class IELAgent(Agent):
             # get minimum of past prices
             p_max = max(self.past_trades)
             z = min(p_max, self.curr_best_bid)
-            if offer >= z or self.get_units() > self.max_holdings or \
+            if offer >= z or self.get_units() <= self.min_holdings or \
                     offer < self.valuations[self.get_units()]:
                 return 0
             elif offer < self.curr_best_bid:
@@ -461,18 +460,31 @@ class IELAgent(Agent):
         if len(self.strategies) == 0:
             self.strategies = [[], []]
             for j in range(self.J):
-                if self.sl > self.valuations[self.get_units() + 1] or self.su < self.valuations[self.get_units()]:
+                if self.sl > self.valuations[self.get_units() + 1] and self.su < self.valuations[self.get_units()]:
                     break
+                elif self.su < self.valuations[self.get_units()]:
+                    if self.get_units() >= self.max_holdings:
+                        self.strategies[self.BUY].append(self.sl)
+                    else:
+                        self.strategies[self.BUY].append(
+                            random.randint(self.sl, int(self.valuations[self.get_units() + 1])))
+                elif self.sl > self.valuations[self.get_units() + 1]:
+                    if self.get_units() <= self.min_holdings:
+                        self.strategies[self.SELL].append(self.su)
+                    else:
+                        self.strategies[self.SELL].append(
+                            random.randint(int(self.valuations[self.get_units()]), self.su))
                 else:
                     if self.get_units() >= self.max_holdings:
                         self.strategies[self.BUY].append(self.sl)
                     else:
                         self.strategies[self.BUY].append(
                             random.randint(self.sl, int(self.valuations[self.get_units() + 1])))
-                    if self.get_units() > self.max_holdings:
+                    if self.get_units() <= self.min_holdings:
                         self.strategies[self.SELL].append(self.su)
                     else:
-                        self.strategies[self.SELL].append(random.randint(int(self.valuations[self.get_units()]), self.su))
+                        self.strategies[self.SELL].append(
+                            random.randint(int(self.valuations[self.get_units()]), self.su))
         self.updateW(self.BUY)
         self.updateW(self.SELL)
 
