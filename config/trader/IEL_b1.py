@@ -496,6 +496,8 @@ class IELAgent(Agent):
         """
         try:
             if session.is_open:
+                self.curr_best_bid = self.sl
+                self.curr_best_offer = self.su
                 self.initialize_strat_set()
             elif session.is_closed:
                 # The purpose of this is to reset the strategy set after a period ends
