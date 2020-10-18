@@ -92,6 +92,7 @@ class IELAgent(Agent):
         self.curr_best_offer = 0
 
         # Updated in received_holdings
+        self.curr_units = None
         self.utilities = [[1] * self.J for i in range(2)]
         self.strategies = []
 
@@ -111,6 +112,9 @@ class IELAgent(Agent):
 
         # Orders waiting to be processed by the server
         self._orders_waiting_ackn = {}
+
+        # Orders that have already been accounted for in unit count
+        self.orders_counted = set()
 
         # Orders that are still waiting to be traded
         self.orders_not_traded = []
@@ -193,7 +197,6 @@ class IELAgent(Agent):
         :return:
         """
 
-        ##self.inform("Who am I? {}".format(self.get_description()))
         self._market_id = list(self.markets.keys())[0]
         self.su = self.markets[self._market_id].max_price
         self.sl = self.markets[self._market_id].min_price
@@ -202,10 +205,7 @@ class IELAgent(Agent):
 
     def get_units(self):
         """ Returns the number of units that the agent holds """
-        if self.holdings is not None:
-            market = self.markets[self._market_id]
-            return self.holdings.assets[market].units
-        return None
+        return self.curr_units
 
     def choiceprobabilities(self, action):
         """
@@ -232,9 +232,11 @@ class IELAgent(Agent):
         """
 
         if action == self.BUY:
-            self.strategies[action] = list(filter(lambda x: x < self.valuations[self.get_units() + 1], self.strategies[action]))
+            self.strategies[action] = list(filter(lambda x: x < self.valuations[self.get_units() + 1],
+                                                    self.strategies[action]))
         else:
-            self.strategies[action] = list(filter(lambda x: x > self.valuations[self.get_units()], self.strategies[action]))
+            self.strategies[action] = list(filter(lambda x: x > self.valuations[self.get_units()],
+                                                  self.strategies[action]))
         if action == self.BUY:
             if len(self.strategies[action]) < self.J:
                 if len(self.strategies[action]) == 0:
@@ -354,7 +356,7 @@ class IELAgent(Agent):
         :param action: 0 corresponds to buying, 1 corresponds to selling
 
         """
-        # #print("Now we are foregone_utility_past")
+        # print("Now we are foregone_utility_past")
         if action == 0:
             bid = self.strategies[action][j]
             # get minimum of past prices
@@ -428,6 +430,15 @@ class IELAgent(Agent):
                 #         self.update_list(order, False)
                 #     else:
                 #         self.update_list(order, True)
+                if order.mine and order.order_type == OrderType.LIMIT and \
+                        order.has_traded and order.ref not in self.orders_counted:
+                    if order.order_side == OrderSide.BUY:
+                        self.curr_units += 1
+                    else:
+                        self.curr_units -= 1
+                    self.updateW(self.BUY)
+                    self.updateW(self.SELL)
+                    self.orders_counted.add(order.ref)
                 if not order.mine:
                     is_mine = False
             if not is_mine:
@@ -446,12 +457,7 @@ class IELAgent(Agent):
         :param holdings:
         :return:
         """
-        try:
-            if len(self.strategies) != 0:
-                self.updateW(self.BUY)
-                self.updateW(self.SELL)
-        except Exception as e:
-            tb.print_exc()
+        pass
 
     def initialize_strat_set(self):
         """
@@ -498,10 +504,16 @@ class IELAgent(Agent):
             if session.is_open:
                 self.curr_best_bid = self.sl
                 self.curr_best_offer = self.su
+                market = self.markets[self._market_id]
+                self.curr_units = self.holdings.assets[market].units
                 self.initialize_strat_set()
+                self.updateW(self.BUY)
+                self.updateW(self.SELL)
             elif session.is_closed:
                 # The purpose of this is to reset the strategy set after a period ends
                 self.strategies = []
+                self.curr_units = None
+                self.orders_counted = set()
                 self._orders_waiting_ackn = {}
         except Exception as e:
             tb.print_exc()
