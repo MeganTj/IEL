@@ -371,9 +371,9 @@ class IELAgent(Agent):
                 return self.valuations[self.get_units() + 1] - bid
         else:
             offer = self.strategies[action][j]
-            # get minimum of past prices
+            # get maximum of past prices
             p_max = max(self.past_trades)
-            z = min(p_max, self.curr_best_bid)
+            z = max(p_max, self.curr_best_bid)
             if offer >= z or self.get_units() <= self.min_holdings or \
                     offer < self.valuations[self.get_units()]:
                 return 0
@@ -389,7 +389,7 @@ class IELAgent(Agent):
         :param action: 0 corresponds to buying, 1 corresponds to selling
         """
         for j in range(self.J):
-            # if len(self.past_prices) > 0:
+            # if len(self.past_trades) > 0:
             #    self.utilities[action][j] = self.foregone_utility_past(j, action)
             # else:
             self.utilities[action][j] = self.foregone_utility(j, action)
@@ -419,12 +419,12 @@ class IELAgent(Agent):
                 return
             is_mine = True
             for order in orders:
-                # if order.has_traded:
-                #     self.update_list(order, False)
-                #     self.update_list(order.traded_order, False)
-                #     self.past_trades.insert(0, max(order.price, order.traded_order.price))
-                #     if len(self.past_trades) > self.T:
-                #         self.past_trades = self.past_trades[0:self.T]
+                if order.has_traded and order.mine:
+                    self.update_list(order, False)
+                    self.update_list(order.traded_order, False)
+                    self.past_trades.insert(0, order.price)
+                    if len(self.past_trades) > self.T:
+                        self.past_trades = self.past_trades[0:self.T]
                 # else:
                 #     if order.is_consumed:
                 #         self.update_list(order, False)
@@ -511,6 +511,7 @@ class IELAgent(Agent):
                 self.updateW(self.SELL)
             elif session.is_closed:
                 # The purpose of this is to reset the strategy set after a period ends
+                self.past_trades = []
                 self.strategies = []
                 self.curr_units = None
                 self.orders_counted = set()
