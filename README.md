@@ -4,9 +4,12 @@ A codebase for IEL bots and simulation analysis software.
 
 ## Implemented features 
 
+* IEL functionalities: Vexperimentation, replication, foregone utility and foregone utility past calculations
+* Initializing bots from .xslsx file
+* Managing multi-period, multi-bot experiments using a bot launcher
+* The above for multi-item experiments
 
-
-## Running IEL Simulations: Last updated on 9/20/2020
+## Running IEL Simulations: Last updated on 12/18/2020
 
 
 Purpose: This is a step-by-step guide on how to run simulations on Flexemarkets (https://flexemarkets.com/site), using the bot_launcher.py script (referred to as bot launcher or launcher from here on) as well as an IEL manager and IEL trader bots. The tutorial is split into two parts: the first is an overview of the Flexemarkets platform, and the second covers the necessary modifications to the bot Python scripts and an explanation of the bot launcher.
@@ -22,13 +25,13 @@ When creating a market, be sure to remember the item name (this is also listed w
 When running simulations with a manager, the initial allocation template will not matter, since the manager determines initial holdings before every period. The traders that are added to the market will correspond with either human users or trader bots (each bot has its own email and password, which is used in Part 2).     
 
 
-### Part 2: Running simulations from the command line (9/20/20 version)
+### Part 2: Running simulations from the command line (With configuration file)
 
 IMPORTANT: Make sure the market is closed before running a simulation.
 
 1) Set the "CONFIG_FILE" variable in bot_launcher to the absolute path of the Excel configuration file. For example, `CONFIG_FILE = "/Users/MeganT/Documents/mytest/IEL_config.xlsx"`
 
-2) Instructions on filling out the configuration file are as follows. 
+2.1) Instructions on filling out the configuration file for single-item experiments are as follows. 
 
 Row 1 of sheet 1 of the configuration file is the header for the overall parameters that all bot share (account name, market id, market item, account email, account password), and these values should be updated in row 2. The header for parameters that can vary per-bot is row 4, and the parameters for each bot with bot number n should be updated in the n'th row following row 4. In sheet 2, the valuation sets are listed as columns that are named in row 1, and one of these names must be exactly referenced in the "val_set" parameter for each bot. The valuation sets start with the value of item 0 at row 2, the value of item 1 at row 3, and so on. 
 
@@ -50,9 +53,19 @@ Other optional parameters are
 * K - The max length of a "considered strategy"
 * T - A measure of how far back to start keeping track of past prices
 
+2.2) Instructions on filling out the configuration file for multi-item experiments are as follows. 
+
+Row 1 of sheet 1 of the configuration file is the header for the overall parameters that all bot share (account name, market id, market items, account email, account password), and these values should be updated in row 2. Market items must be split by ", " -- otherwise the items will be read in incorrectly. Also, market items must be listed in the order which they should appear in the unit counts array used in computing valuation. If the unit count array is (r_A, r_B, r_C), where r_X is the number of units of item X, then one should enter "A, B, C". 
+
+The header for parameters that can vary per-bot is row 4, and the parameters for each bot with bot number n should be updated in the n'th row following row 4. In any sheet following the first one, enter information on functional forms (see val_1 in the template) for calculating holding valuations. The "val" column contains the name of the valuation configuration sheet that each bot refers to. The only requirement for a valuation sheet is that it must contain a "form" column with an integer or string referring to the functional form that is implemented in the code. All parameters for a functional form must be entered as columns, with the name of the parameter in row 1. Parameters that are matrices are handled by entering values into the column in row-major order. 
+
+One can also enter minimum/maximum item holdings on a separate sheet (see holdings_1 in the template), though it is optional that a bot be assigned a holdings sheet.  
+
+The same numeric bot parameters that are optional in the single-item experiments (J, muv, sigmav, mul, K, T) are also optional in the multi-item case.
 
 
-### Part 2: Running simulations from the command line (8/8/20 version)
+
+### Part 2: Running simulations from the command line (No configuration file)
 
 IMPORTANT: Make sure the market is closed before running a simulation. 
 
