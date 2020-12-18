@@ -1,4 +1,6 @@
 import copy
+import sys
+from collections import OrderedDict
 from typing import List
 from fmclient import Agent
 from fmclient import Order, OrderSide, OrderType, Holding
@@ -13,16 +15,21 @@ import traceback as tb
 
 NAME_COL = "account_name"
 MARKET_ID_COL = "market_id"
+MARKET_ITEMS_COL = "market_items"
 BOT_NAME_COL = "bot_name"
 BOT_PASSWORD_COL = "bot_password"
-VAL_SET_COL = "val_set"
-MAX_HOLDINGS_COL = "max_holdings"
+HOLDINGS_COL = "holdings"
 MIN_HOLDINGS_COL = "min_holdings"
+MAX_HOLDINGS_COL = "max_holdings"
+VAL_COL = "val"
 J_COL = "J"
 K_COL = "K"
 MUV_COL= "muv"
 MUL_COL = "mul"
 T_COL = "T"
+
+# Cut down the name of the item to 3 for order references
+ITEM_PREF = 3
 
 class IELAgent(Agent):
     """
@@ -78,6 +85,8 @@ class IELAgent(Agent):
         name = "IEL" + str(bot_num)
         self.bot_name = "test" + str(bot_num) + "@test"
         self.bot_password = "pass" + str(bot_num)
+        # Parameters for 2+ item utility functions
+        self.val_dict = {}
         self.init_from_config(config_file, bot_num)
         # Calls the __init__  method of the base Agent class so that this
         # subclass does not repeat code to set up account,  email, password,
@@ -86,25 +95,21 @@ class IELAgent(Agent):
 
         # Updated after bot has been initialised and can retrieve these
         # values from the market
-        self.su = 0
-        self.sl = 0
-        self.curr_best_bid = 0
-        self.curr_best_offer = 0
+        self.su = {}
+        self.sl = {}
+        self.curr_best_bid = {}
+        self.curr_best_offer = {}
 
-        # Updated in received_holdings
-        self.curr_units = None
-        self.utilities = [[1] * self.J for i in range(2)]
-        self.strategies = []
+        # Updated in received_holdings. This is an OrderedDict because the order in which
+        # item holdings appear matters when computing utility
+        self.curr_units = OrderedDict()
+        self.utilities = {}
+        self.strategies = {}
 
-        self.curr_strat = [0, 0]
-        self.onstrat = [0, 0]
+        self.curr_strat = {}
 
-        # Keep track of prices at which past transactions has taken place
-        self.past_prices = []
-
-        # IMPORTANT! We assume there is only 1 market in the marketplace.
-        # The market id is fetched automatically on initialisation.
-        self._market_id = -1
+        # Fetch the market ids of each item in initialised
+        self.market_ids = {}
 
         # IMPORTANT! Always send orders for 1 unit of item.
         self._units = 1
@@ -113,14 +118,12 @@ class IELAgent(Agent):
         # Orders waiting to be processed by the server
         self._orders_waiting_ackn = {}
 
-        # Orders that have already been accounted for in unit count
-        self.orders_counted = set()
+        # Keep track of prices at which past transactions has taken place
+        self.past_prices = {}
 
-        # Orders that are still waiting to be traded
-        self.orders_not_traded = []
         # Prices at which past trades were made, with the most recent
         # trading prices at the beginning of the list.
-        self.past_trades = []
+        self.past_trades = {}
 
         self._mm_buy_prefix = "b"
 
@@ -129,11 +132,9 @@ class IELAgent(Agent):
         self._mm_cancel_prefix = "c"
 
         # Description will be shown on the hosting platform.
-
         self.description = "IEL bot"  # self.get_description()
 
         # Simple counter to track of orders sent
-
         self._counter = 0
         self._timer = 0
 
@@ -144,32 +145,45 @@ class IELAgent(Agent):
         '''
         Read in general info shared across all bots. Then read in
         bot-specific information
+
+        :param fname: the name of the excel spreadsheet
+
+        :param bot_num: the number of this bot
         '''
         gen_info = pd.read_excel(fname, nrows=1)
+        # Get the id of the marketplace, which can contain multiple item markets
         self.marketplace_id = gen_info[MARKET_ID_COL].item()
         self.account_name = gen_info[NAME_COL].item()
+        # Get the list of all market items
+        items = gen_info[MARKET_ITEMS_COL].item().split(', ')
 
+        # Read in bot specific parameters
         bot_info = pd.read_excel(fname, header=3)
         row_index = bot_num - 1
-        val_set = bot_info[VAL_SET_COL].iloc[row_index]
+        val_sheet = bot_info[VAL_COL].iloc[row_index]
 
-        # Now read in valuations from the second sheet (index 1)
-        val_sets = pd.read_excel(fname, sheet_name=1)
-        self.valuations = list(val_sets[val_set].values)
+        # Now read in valuation function parameters from the second sheet (index 1)
+        val_set = pd.read_excel(fname, sheet_name=str(val_sheet))
+        for col, data in val_set.items():
+            self.val_dict[col] = data[~np.isnan(data)].to_numpy()
+
         # optional parameters we could configure. If not set in the
         # config file, just use the default class values
-        self.min_holdings = 0
-        self.max_holdings = len(self.valuations) - 1
-        # additional 0 is added to the valuation array fix the index error
-        self.valuations.append(0)
-        if MIN_HOLDINGS_COL in bot_info.columns:
-            val = bot_info[MIN_HOLDINGS_COL].iloc[row_index]
-            if not np.isnan(val):
-                self.min_holdings = max(self.min_holdings, int(val))
-        if MAX_HOLDINGS_COL in bot_info.columns:
-            val = bot_info[MAX_HOLDINGS_COL].iloc[row_index]
-            if not np.isnan(val):
-                self.max_holdings = min(self.max_holdings, int(val))
+        min_holdings = [0] * len(items)
+        max_holdings = [sys.maxsize] * len(items)
+        if HOLDINGS_COL in bot_info.columns:
+            holdings_sheet = bot_info[HOLDINGS_COL].iloc[row_index]
+            if not pd.isnull(holdings_sheet):
+                holdings = pd.read_excel(fname, sheet_name=str(holdings_sheet))
+                if MIN_HOLDINGS_COL in holdings.columns:
+                    min_holdings = holdings[MIN_HOLDINGS_COL]
+                if MAX_HOLDINGS_COL in holdings.columns:
+                    max_holdings = holdings[MAX_HOLDINGS_COL]
+
+        # The number of entries should match the number of items
+        self.min_holdings = dict(zip(items, min_holdings))
+        self.max_holdings = dict(zip(items, max_holdings))
+
         if J_COL in bot_info.columns:
             val = bot_info[J_COL].iloc[row_index]
             if not np.isnan(val):
@@ -196,129 +210,191 @@ class IELAgent(Agent):
         Called after initialization of the robot is complete.
         :return:
         """
+        try:
+            for market_id, market in self.markets.items():
+                item = market.item
+                self.market_ids[item] = market_id
+                self.su[item] = self.markets[market_id].max_price
+                self.sl[item] = self.markets[market_id].min_price
+                self.utilities[item] = [[1] * self.J for _ in range(2)]
+        except Exception:
+            tb.print_exc()
 
-        self._market_id = list(self.markets.keys())[0]
-        self.su = self.markets[self._market_id].max_price
-        self.sl = self.markets[self._market_id].min_price
-        self.curr_best_bid = self.sl
-        self.curr_best_offer = self.su
+    def add_one(self, item):
+        """
+        Add one to the unit count of the passed in item and return
+        the unit count for all items
 
-    def get_units(self):
-        """ Returns the number of units that the agent holds """
-        return self.curr_units
+        :param item: the item for which we add one to its unit count
+        """
+        copy_dict = copy.deepcopy(self.curr_units)
+        copy_dict[item] += 1
+        return copy_dict
 
-    def choiceprobabilities(self, action):
+    def form1(self, units):
+        '''
+        Computes a valuation using the functional form v = mr' - (a/2) r Sr’.  
+        If there are K goods, r is the vector of holdings,  r= (r_1, …,  r_K).
+        m is a vector of parameters m=(m_1,…,m_K), a is a parameter, a real number.  
+        And S is a KxK matrix.
+
+        :param units: the unit counts of all items
+        '''
+        S = np.asarray(self.val_dict['S'])
+        # Since S is passed in as a list, we need to reshape it to be a n by n array
+        m = self.val_dict['m']
+        S = S.reshape((len(m), len(m)))
+        m = np.asarray(m)
+        a = self.val_dict['a']
+        r = np.asarray(list(units.values()))
+        r = np.reshape(r, (1, r.size))
+        ans = np.dot(m, np.transpose(r)) - (float(a) / 2.0) * np.matmul(r, np.matmul(S, np.transpose(r)))
+        return max(0, ans)
+
+    def get_val(self, units):
+        '''
+        Returns the valuation of the passed in holdings (the counts of units
+        we have for each item)
+
+        :param units: the unit counts of all items
+        '''
+        form = int(self.val_dict['form'][0])
+        if form == 1:
+            return self.form1(units)
+
+    def choiceprobabilities(self, item, action):
         """
         Calculates the probability of choosing a strategy for all strategies of
         the same action. Probability is proportional to the foregone utility of
         one strategy divided by the sum of foregone utilities over all
         strategies.
 
+        :param item: the item that we're trading
+
         :param action: 0 corresponds to buying, 1 corresponds to selling
         """
         choicep = []
-        sumw = sum(self.utilities[action])
+        sumw = sum(self.utilities[item][action])
         if sumw == 0:
             return np.zeros(self.J)
         for j in range(self.J):
-            choicep.append(self.utilities[action][j] / float(sumw))
+            choicep.append(self.utilities[item][action][j] / float(sumw))
         return choicep
 
-    def strat_selection(self, action):
+    def strat_selection(self, item, action):
         """
         Chooses a strategy out of all strategies of the same action.
+
+        :param item: the item that we're trading
 
         :param action: 0 corresponds to buying, 1 corresponds to selling
         """
 
         if action == self.BUY:
-            self.strategies[action] = list(filter(lambda x: x < self.valuations[self.get_units() + 1],
-                                                    self.strategies[action]))
+            self.strategies[item][action] = list(filter(lambda x: x < self.get_val(self.add_one(item)),
+                                                    self.strategies[item][action]))
         else:
-            self.strategies[action] = list(filter(lambda x: x > self.valuations[self.get_units()],
-                                                  self.strategies[action]))
+            self.strategies[item][action] = list(filter(lambda x: x > self.get_val(self.curr_units),
+                                                  self.strategies[item][action]))
         if action == self.BUY:
-            if len(self.strategies[action]) < self.J:
-                if len(self.strategies[action]) == 0:
-                    self.curr_strat[action] = self.sl
-                x = self.J - len(self.strategies[action])
+            if len(self.strategies[item][action]) < self.J:
+                if len(self.strategies[item][action]) == 0:
+                    self.curr_strat[item][action] = self.sl[item]
+                x = self.J - len(self.strategies[item][action])
                 for i in range(x):
-                    self.strategies[action].append(int(random.uniform(self.sl, self.valuations[self.get_units() + 1])))
+                    self.strategies[item][action].append(int(random.uniform(self.sl[item],
+                                                                            self.get_val(self.add_one(item)))))
         else:
-            if len(self.strategies[action]) < self.J:
-                if len(self.strategies[action]) == 0:
-                    self.curr_strat[action] = self.su
-                x = self.J - len(self.strategies[action])
+            if len(self.strategies[item][action]) < self.J:
+                if len(self.strategies[item][action]) == 0:
+                    self.curr_strat[action] = self.su[item]
+                x = self.J - len(self.strategies[item][action])
                 for i in range(x):
-                    self.strategies[action].append(int(random.uniform(self.valuations[self.get_units()], self.su)))
+                    self.strategies[item][action].append(int(random.uniform(self.get_val(self.curr_units),
+                                                                            self.su[item])))
 
             self.updateW(action)
-        choicep = self.choiceprobabilities(action)
+        choicep = self.choiceprobabilities(item, action)
 
         if sum(choicep) == 0:
-            choicep = [1 / len(self.strategies[action]) for x in self.strategies[action]]
-        self.curr_strat[action] = int(self.rand_choice(self.strategies[action], choicep))
+            choicep = [1 / len(self.strategies[item][action]) for _ in self.strategies[item][action]]
+        self.curr_strat[item][action] = int(self.rand_choice(self.strategies[item][action], choicep))
 
-    def rand_choice(self, items, distr):
+    def rand_choice(self, strats, distr):
+        '''
+        Randomly chooses a strategy from the passed in strats array, and using
+        a probability distribution for picking a given strategy
+
+        :param strats: length J array of strategies we're considering
+
+        :param distr: the probability distribution associated with the
+        strategies
+        '''
         x = random.uniform(0, 1)
         cumulative_probability = 0.0
-        saved_item = 0
-        for item, item_probability in zip(items, distr):
-            cumulative_probability += item_probability
+        saved_strat = 0
+        for strat, strat_probability in zip(strats, distr):
+            cumulative_probability += strat_probability
             if x < cumulative_probability:
-                saved_item = item
+                saved_strat = strat
                 break
-        return saved_item
+        return saved_strat
 
-    def Vexperimentation(self, action):
+    def Vexperimentation(self, item, action):
         """
         Value experimentation for strategies of the same action. With a
         probability determined by muv, takes a strategy as a center of a
         distribution and generates a new strategy around the center.
 
+        :param item: the item that we're trading
+
         :param action: 0 corresponds to buying, 1 corresponds to selling
         """
         for j in range(self.J):
             if action == self.BUY:
-                sigmav = max(1, 0.1 * (self.valuations[self.get_units() + 1] - self.sl))
+                sigmav = max(1, 0.1 * (self.get_val(self.add_one(item)) - self.sl[item]))
                 if random.uniform(0, 1) < self.muv:
-                    centers = self.strategies[action][j]
-                    r = (truncnorm.rvs((self.sl - centers) / float(sigmav),
-                                       (self.su - centers) / float(sigmav),
+                    centers = self.strategies[item][action][j]
+                    r = (truncnorm.rvs((self.sl[item] - centers) / float(sigmav),
+                                       (self.su[item] - centers) / float(sigmav),
                                        loc=centers, scale=sigmav, size=1))
-                    self.strategies[action][j] = int(np.array(r).tolist()[0])
+                    self.strategies[item][action][j] = int(np.array(r).tolist()[0])
             else:
-                sigmav = max(1, 0.1 * (self.su - self.valuations[self.get_units()]))
+                sigmav = max(1, 0.1 * (self.su[item] - self.get_val(self.curr_units)))
                 if random.uniform(0, 1) < self.muv:
-                    centers = self.strategies[action][j]
-                    r = (truncnorm.rvs((self.sl - centers) / float(sigmav),
-                                       (self.su - centers) / float(sigmav),
+                    centers = self.strategies[item][action][j]
+                    r = (truncnorm.rvs((self.sl[item] - centers) / float(sigmav),
+                                       (self.su[item] - centers) / float(sigmav),
                                        loc=centers, scale=sigmav, size=1))
-                    self.strategies[action][j] = int(np.array(r).tolist()[0])
+                    self.strategies[item][action][j] = int(np.array(r).tolist()[0])
 
-    def replicate(self, action):
+    def replicate(self, item, action):
         """
         Replicates strategies of the same action by comparing two randomly
         chosen strategies and replacing that with the lower utility with
         the other strategy.
+
+        :param item: the item that we're trading
 
         :param action: 0 corresponds to buying, 1 corresponds to selling
         """
         for j in range(self.J):
             j1 = random.randrange(self.J)
             j2 = random.randrange(self.J)
-            self.strategies[action][j] = self.strategies[action][j2]
-            self.utilities[action][j] = self.utilities[action][j2]
-            if self.utilities[action][j1] > self.utilities[action][j2]:
-                self.strategies[action][j] = self.strategies[action][j1]
-                self.utilities[action][j] = self.utilities[action][j1]
+            self.strategies[item][action][j] = self.strategies[item][action][j2]
+            self.utilities[item][action][j] = self.utilities[item][action][j2]
+            if self.utilities[item][action][j1] > self.utilities[item][action][j2]:
+                self.strategies[item][action][j] = self.strategies[item][action][j1]
+                self.utilities[item][action][j] = self.utilities[item][action][j1]
 
-    def foregone_utility(self, j, action):
+    def foregone_utility(self, item, j, action):
         """
         Calculates the foregone utility of a strategy with index j and
         corresponding to a certain action. Currently, we only consider the
         current book and look at the current highest bid and current lowest
         offer.
+
+        :param item: the item that we're trading
 
         :param j: The index of the strategy for which we want to update
         the foregone utility.
@@ -327,28 +403,30 @@ class IELAgent(Agent):
         """
 
         if action == 0:
-            bid = self.strategies[action][j]
+            bid = self.strategies[item][action][j]
             # Return 0 for case where bid exceeds the valuation of item to be bought
-            if bid <= self.curr_best_offer or self.get_units() >= self.max_holdings or \
-                    bid > self.valuations[self.get_units() + 1]:
+            if bid <= self.curr_best_offer[item] or self.curr_units[item] >= self.max_holdings[item] or \
+                    bid > self.get_val(self.add_one(item)):
                 return 0
             else:
-                return self.valuations[self.get_units() + 1] - self.curr_best_offer
+                return self.get_val(self.add_one(item)) - self.curr_best_offer[item]
         else:
-            offer = self.strategies[action][j]
+            offer = self.strategies[item][action][j]
             # Return 0 for case where the offer is lower than the valuation of item to be sold
-            if offer >= self.curr_best_bid or self.get_units() <= self.min_holdings or \
-                    offer < self.valuations[self.get_units()]:
+            if offer >= self.curr_best_bid[item] or self.curr_units[item] <= self.min_holdings[item] or \
+                    offer < self.get_val(self.curr_units):
                 return 0
             else:
-                return self.curr_best_bid - self.valuations[self.get_units()]
+                return self.curr_best_bid[item] - self.get_val(self.curr_units)
 
-    def foregone_utility_past(self, j, action):
+    def foregone_utility_past(self, item, j, action):
         """
         Calculates the foregone utility of a strategy with index j and
         corresponding to a certain action. We consider the
         current book--looking at the current highest bid/current lowest
         offer--as well as past transactions.
+
+        :param item: the item that we're trading
 
         :param j: The index of the strategy for which we want to update
         the foregone utility.
@@ -358,29 +436,29 @@ class IELAgent(Agent):
         """
         # print("Now we are foregone_utility_past")
         if action == 0:
-            bid = self.strategies[action][j]
+            bid = self.strategies[item][action][j]
             # get minimum of past prices
-            p_min = min(self.past_trades)
-            z = min(p_min, self.curr_best_offer)
-            if bid <= z or self.get_units() >= self.max_holdings or \
-                    bid > self.valuations[self.get_units() + 1]:
+            p_min = min(self.past_trades[item])
+            z = min(p_min, self.curr_best_offer[item])
+            if bid <= z or self.curr_units[item] >= self.max_holdings[item] or \
+                    bid > self.get_val(self.add_one(item)):
                 return 0
-            elif bid > self.curr_best_offer:
-                return self.valuations[self.get_units() + 1] - self.curr_best_offer
-            elif z < bid <= self.curr_best_offer:
-                return self.valuations[self.get_units() + 1] - bid
+            elif bid > self.curr_best_offer[item]:
+                return self.get_val(self.add_one(item)) - self.curr_best_offer[item]
+            elif z < bid <= self.curr_best_offer[item]:
+                return self.get_val(self.add_one(item)) - bid
         else:
-            offer = self.strategies[action][j]
+            offer = self.strategies[item][action][j]
             # get maximum of past prices
-            p_max = max(self.past_trades)
-            z = max(p_max, self.curr_best_bid)
-            if offer >= z or self.get_units() <= self.min_holdings or \
-                    offer < self.valuations[self.get_units()]:
+            p_max = max(self.past_trades[item])
+            z = max(p_max, self.curr_best_bid[item])
+            if offer >= z or self.curr_units[item] <= self.min_holdings[item] or \
+                    offer < self.get_val(self.curr_units):
                 return 0
-            elif offer < self.curr_best_bid:
-                return self.curr_best_offer - self.valuations[self.get_units()]
-            elif z > offer >= self.curr_best_bid:
-                return offer - self.valuations[self.get_units()]
+            elif offer < self.curr_best_bid[item]:
+                return self.curr_best_offer[item] - self.get_val(self.curr_units)
+            elif z > offer >= self.curr_best_bid[item]:
+                return offer - self.get_val(self.curr_units)
 
     def updateW(self, action):
         """
@@ -388,20 +466,12 @@ class IELAgent(Agent):
 
         :param action: 0 corresponds to buying, 1 corresponds to selling
         """
-        for j in range(self.J):
-            # if len(self.past_trades) > 0:
-            #    self.utilities[action][j] = self.foregone_utility_past(j, action)
-            # else:
-            self.utilities[action][j] = self.foregone_utility(j, action)
-
-    def update_list(self, order, add):
-        for i in range(len(self.orders_not_traded)):
-            if self.orders_not_traded[i] == order:
-                if not add:
-                    self.orders_not_traded.pop(i)
-                return
-        if add:
-            self.orders_not_traded.append(order)
+        for item in self.curr_units.keys():
+            for j in range(self.J):
+                if len(self.past_trades[item]) > 0:
+                    self.utilities[item][action][j] = self.foregone_utility_past(item, j, action)
+                else:
+                    self.utilities[item][action][j] = self.foregone_utility(item, j, action)
 
     def received_orders(self, orders: List[Order]):
         """
@@ -412,38 +482,39 @@ class IELAgent(Agent):
         react or market make.
 
         :param orders: List of Orders received from FM via WS
-        :return:
         """
         try:
             if len(self.strategies) == 0 or not self.is_session_active():
                 return
-            is_mine = True
+            is_mine = {}
+            for item in self.curr_units.keys():
+                is_mine[item] = True
             for order in orders:
+                order_item = order.market.item
+                # Updates the list of past trades for computing foregone past
+                # utility
                 if order.has_traded and order.mine:
-                    self.update_list(order, False)
-                    self.update_list(order.traded_order, False)
-                    self.past_trades.insert(0, order.price)
+                    self.past_trades[order_item].insert(0, order.price)
                     if len(self.past_trades) > self.T:
-                        self.past_trades = self.past_trades[0:self.T]
-                # else:
-                #     if order.is_consumed:
-                #         self.update_list(order, False)
-                #     else:
-                #         self.update_list(order, True)
+                        self.past_trades[order_item] = self.past_trades[order_item][0:self.T]
+
                 if order.mine and order.order_type == OrderType.LIMIT and \
-                        order.has_traded and order.ref not in self.orders_counted:
+                        order.has_traded:
+                    order_item = order.market.item
                     if order.order_side == OrderSide.BUY:
-                        self.curr_units += 1
+                        self.inform('Added a unit of ' + order_item)
+                        self.curr_units[order_item] += 1
                     else:
-                        self.curr_units -= 1
+                        self.inform('Subtracted a unit of ' + order_item)
+                        self.curr_units[order_item] -= 1
                     self.updateW(self.BUY)
                     self.updateW(self.SELL)
-                    self.orders_counted.add(order.ref)
                 if not order.mine:
-                    is_mine = False
-            if not is_mine:
-                order_book = self._categorize_orders()
-                self._react_to_book(order_book)
+                    is_mine[order_item] = False
+            for item, val in is_mine.items():
+                if not val:
+                    order_book = self._categorize_orders(item)
+                    self._react_to_book(item, order_book)
         except Exception as e:
             tb.print_exc()
 
@@ -455,7 +526,7 @@ class IELAgent(Agent):
         values within the proper ranges for bids and offers based on the marginal utility
         of the next item. Updates the foregone utilities when holdings have changed.
         :param holdings:
-        :return:
+        :return
         """
         pass
 
@@ -463,34 +534,22 @@ class IELAgent(Agent):
         """
         Only initializes the strategy set if they are currently uninitialized
         """
-        if len(self.strategies) == 0:
-            self.strategies = [[], []]
-            for j in range(self.J):
-                if self.sl > self.valuations[self.get_units() + 1] and self.su < self.valuations[self.get_units()]:
-                    break
-                elif self.su < self.valuations[self.get_units()]:
-                    if self.get_units() >= self.max_holdings:
-                        self.strategies[self.BUY].append(self.sl)
+        for item in self.curr_units.keys():
+            if item not in self.strategies:
+                self.strategies[item] = [[], []]
+                for j in range(self.J):
+                    if self.su[item] < self.get_val(self.curr_units) or \
+                            self.curr_units[item] >= self.max_holdings[item]:
+                        self.strategies[item][self.BUY].append(self.sl[item])
                     else:
-                        self.strategies[self.BUY].append(
-                            random.randint(self.sl, int(self.valuations[self.get_units() + 1])))
-                elif self.sl > self.valuations[self.get_units() + 1]:
-                    if self.get_units() <= self.min_holdings:
-                        self.strategies[self.SELL].append(self.su)
+                        self.strategies[item][self.BUY].append(
+                                random.randint(self.sl[item], int(self.get_val(self.add_one(item)))))
+                    if self.sl[item] > self.get_val(self.add_one(item)) or \
+                            self.curr_units[item] <= self.min_holdings[item]:
+                        self.strategies[item][self.SELL].append(self.su[item])
                     else:
-                        self.strategies[self.SELL].append(
-                            random.randint(int(self.valuations[self.get_units()]), self.su))
-                else:
-                    if self.get_units() >= self.max_holdings:
-                        self.strategies[self.BUY].append(self.sl)
-                    else:
-                        self.strategies[self.BUY].append(
-                            random.randint(self.sl, int(self.valuations[self.get_units() + 1])))
-                    if self.get_units() <= self.min_holdings:
-                        self.strategies[self.SELL].append(self.su)
-                    else:
-                        self.strategies[self.SELL].append(
-                            random.randint(int(self.valuations[self.get_units()]), self.su))
+                        self.strategies[item][self.SELL].append(
+                            random.randint(int(self.get_val(self.curr_units)), self.su[item]))
         self.updateW(self.BUY)
         self.updateW(self.SELL)
 
@@ -502,19 +561,22 @@ class IELAgent(Agent):
         """
         try:
             if session.is_open:
-                self.curr_best_bid = self.sl
-                self.curr_best_offer = self.su
-                market = self.markets[self._market_id]
-                self.curr_units = self.holdings.assets[market].units
+                for item, market_id in self.market_ids.items():
+                    self.curr_best_bid[item] = self.sl[item]
+                    self.curr_best_offer[item] = self.su[item]
+                    market = self.markets[market_id]
+                    self.curr_units[item] = self.holdings.assets[market].units
+                    self.curr_strat[item] = [self.sl[item], self.su[item]]
+                    self._orders_waiting_ackn[item] = {}
+                    self.past_trades[item] = []
                 self.initialize_strat_set()
                 self.updateW(self.BUY)
                 self.updateW(self.SELL)
             elif session.is_closed:
                 # The purpose of this is to reset the strategy set after a period ends
-                self.past_trades = []
-                self.strategies = []
-                self.curr_units = None
-                self.orders_counted = set()
+                self.past_trades = {}
+                self.strategies = {}
+                self.curr_units = {}
                 self._orders_waiting_ackn = {}
         except Exception as e:
             tb.print_exc()
@@ -529,16 +591,18 @@ class IELAgent(Agent):
 
     def check_book(self):
         try:
-            if len(self.strategies) != 0 and self.is_session_active():
-                order_book = self._categorize_orders()
-                if len(order_book["mine"]["buy"]) > 0:
-                    self.cancel_ord(self.BUY, order_book)
-                if len(order_book["mine"]["sell"]) > 0:
-                    self.cancel_ord(self.SELL, order_book)
-                self.send_ord(self.BUY, order_book)
-                self.send_ord(self.SELL, order_book)
+            if self.current_session is not None and self.is_session_active():
+                for item in self.curr_units.keys():
+                    if len(self.strategies[item]) != 0 and self.is_session_active():
+                        order_book = self._categorize_orders(item)
+                        if len(order_book["mine"]["buy"]) > 0:
+                            self.cancel_ord(self.BUY, order_book)
+                        if len(order_book["mine"]["sell"]) > 0:
+                            self.cancel_ord(self.SELL, order_book)
+                        self.send_ord(item, self.BUY, order_book)
+                        self.send_ord(item, self.SELL, order_book)
         except Exception as e:
-            tb.print_exc(e)
+            tb.print_exc()
 
     def received_trades(self, orders: List[Order], market: Market = None):
         """
@@ -557,7 +621,7 @@ class IELAgent(Agent):
         """
         pass
 
-    def _get_order(self, order_side):
+    def _get_order(self, item, order_side):
         """
         Takes a request for a either a buy or sell order, the type of which is
         specified by order_side. Returns an order.
@@ -567,18 +631,18 @@ class IELAgent(Agent):
         action = self.BUY
         if order_side == OrderSide.SELL:
             action = self.SELL
-        self.Vexperimentation(action)
+        self.Vexperimentation(item, action)
         self.updateW(action)
-        self.replicate(action)
-        self.strat_selection(action)
+        self.replicate(item, action)
+        self.strat_selection(item, action)
         if order_side == OrderSide.SELL and (
-                self.curr_strat[self.SELL] < self.sl or self.curr_strat[self.SELL] > self.su):
+                self.curr_strat[item][self.SELL] < self.sl[item] or self.curr_strat[item][self.SELL] > self.su[item]):
             raise Exception('Price should not be less than the minimum or greater than the maximum when selling.')
         if order_side == OrderSide.BUY and (
-                self.curr_strat[self.BUY] < self.sl or self.curr_strat[self.BUY] > self.su):
+                self.curr_strat[item][self.BUY] < self.sl[item] or self.curr_strat[item][self.BUY] > self.su[item]):
             raise Exception('Price should not be less than the minimum or greater than the maximum when selling.')
-        price = max(self.sl, self.curr_strat[action])
-        order = Order.create_new(self.markets[self._market_id])
+        price = max(self.sl[item], self.curr_strat[item][action])
+        order = Order.create_new(self.markets[self.market_ids[item]])
         order.price = price
         order.units = self._units
         order.order_type = OrderType.LIMIT
@@ -595,7 +659,7 @@ class IELAgent(Agent):
         """
         return self.description
 
-    def _categorize_orders(self):
+    def _categorize_orders(self, item):
 
         """
 
@@ -615,7 +679,9 @@ class IELAgent(Agent):
         orders_dict = {"mine": {"buy": [], "sell": []}, "others": {"buy": [], "sell": []}}
         for order in Order.all().values():
             # Make sure to exclude cancel orders
-            if order.order_type == OrderType.LIMIT and order.is_pending:
+            order_item = order.market.item
+            if order.order_type == OrderType.LIMIT and order.is_pending and \
+                order_item == item:
                 if order.mine and order.order_side == OrderSide.BUY:
                     orders_dict["mine"]["buy"].append(order)
                 elif order.mine and order.order_side == OrderSide.SELL:
@@ -644,34 +710,34 @@ class IELAgent(Agent):
             order = order_book["mine"][order_str].pop(0)
             cancel_order = copy.copy(order)
             cancel_order.order_type = OrderType.CANCEL
-            cancel_order.ref = self._increment_counter(self._mm_cancel_prefix)
+            cancel_order.ref = self._increment_counter(order.market.item, self._mm_cancel_prefix)
             self.send_order(cancel_order)
 
-    def send_ord(self, action, order_book):
+    def send_ord(self, item, action, order_book):
         my_orders = order_book["mine"]
         if action == self.BUY:
-            if self.sl <= self.valuations[self.get_units() + 1]:
-                waiting = self._waiting_for(self._mm_buy_prefix)
-                if not waiting and len(my_orders["buy"]) == 0 and self.get_units() < self.max_holdings:
-                    order = self._get_order(OrderSide.BUY)
+            if self.sl[item] <= self.get_val(self.add_one(item)):
+                waiting = self._waiting_for(item, self._mm_buy_prefix)
+                if not waiting and len(my_orders["buy"]) == 0 and self.curr_units[item] < self.max_holdings[item]:
+                    order = self._get_order(item, OrderSide.BUY)
                     cash_i_have = self.holdings.cash_available
                     if len(my_orders["buy"]) < self._max_market_making_orders \
                             and cash_i_have >= order.price:
-                        order.ref = self._increment_counter(self._mm_buy_prefix)
+                        order.ref = self._increment_counter(item, self._mm_buy_prefix)
                         self.send_order(order)
         else:
-            if self.su >= self.valuations[self.get_units()]:
-                waiting = self._waiting_for(self._mm_sell_prefix)
+            if self.su[item] >= self.get_val(self.curr_units):
+                waiting = self._waiting_for(item, self._mm_sell_prefix)
                 if not waiting and len(my_orders["sell"]) == 0:
-                    order = self._get_order(OrderSide.SELL)
-                    market = self.markets[self._market_id]
+                    order = self._get_order(item, OrderSide.SELL)
+                    market = self.markets[self.market_ids[item]]
                     units_i_have = self.holdings.assets[market].units_available
                     if len(my_orders["sell"]) < self._max_market_making_orders \
-                            and units_i_have >= order.units and self.get_units() > self.min_holdings:
-                        order.ref = self._increment_counter(self._mm_sell_prefix)
+                            and units_i_have >= order.units and self.curr_units[item] > self.min_holdings[item]:
+                        order.ref = self._increment_counter(item, self._mm_sell_prefix)
                         self.send_order(order)
 
-    def _react_to_book(self, order_book):
+    def _react_to_book(self, item, order_book):
 
         """
         The agent checks if it can react to any order.
@@ -690,13 +756,12 @@ class IELAgent(Agent):
         curr_offers = others_orders["sell"]
         submit_bid = False
         submit_offer = False
-
         if len(curr_bids) != 0:
             h_bid = curr_bids[0].price
             if h_bid != self.curr_best_bid:
                 submit_offer = True
                 # Updates the current best bid
-                self.curr_best_bid = h_bid
+                self.curr_best_bid[item] = h_bid
                 self.updateW(self.SELL)
 
         if len(curr_offers) != 0:
@@ -704,7 +769,7 @@ class IELAgent(Agent):
             if l_offer != self.curr_best_offer:
                 submit_bid = True
                 # Updates the current best offer
-                self.curr_best_offer = l_offer
+                self.curr_best_offer[item] = l_offer
                 self.updateW(self.BUY)
 
         if submit_bid:
@@ -712,21 +777,19 @@ class IELAgent(Agent):
         if submit_offer:
             self.cancel_ord(self.SELL, order_book)
 
-    def _increment_counter(self, prefix):
+    def _increment_counter(self, item, prefix):
         """
         Increments the counter and returns a reference with a prefix
         corresponding to the type of an order.
 
         :return: Reference of an order
         """
-        ref = str(prefix) + str(self._counter)
+        ref = str(item[0:ITEM_PREF]) + '_' + str(prefix) + str(self._counter)
         self._counter += 1
         return ref
 
-    def _waiting_for(self, prefix):
-
+    def _waiting_for(self, item, prefix):
         """
-
         Check if there exists an order that we are waiting for the server to process
 
         such that the order's ref starts with a given prefix.
@@ -737,8 +800,8 @@ class IELAgent(Agent):
 
         """
 
-        for key in self._orders_waiting_ackn.keys():
-            if key.startswith(prefix):
+        for key in self._orders_waiting_ackn[item].keys():
+            if key.startswith(str(item[0:ITEM_PREF]) + '_' + prefix):
                 return True
         return False
 
@@ -758,8 +821,8 @@ class IELAgent(Agent):
         # to a dictionary that keeps track of objects using their reference.
 
         if order.ref is None:
-            order.ref = self._increment_counter("n")
-        self._orders_waiting_ackn[order.ref] = order
+            order.ref = self._increment_counter(order.market.item, "n")
+        self._orders_waiting_ackn[order.market.item][order.ref] = order
         super().send_order(order)
 
     def received_marketplace_info(self, marketplace_info):
@@ -769,13 +832,15 @@ class IELAgent(Agent):
     def order_accepted(self, order):
         ''' Now takes in the order book as a parameter. '''
         if order.mine:
-            if order.ref in self._orders_waiting_ackn:
-                del self._orders_waiting_ackn[order.ref]
+            order_item = order.market.item
+            if order.ref in self._orders_waiting_ackn[order_item]:
+                del self._orders_waiting_ackn[order_item][order.ref]
 
     def order_rejected(self, info, order):
         if order.mine:
+            order_item = order.market.item
             if order.ref in self._orders_waiting_ackn:
-                del self._orders_waiting_ackn[order.ref]
+                del self._orders_waiting_ackn[order_item][order.ref]
 
 
     def run(self):
